@@ -27,6 +27,30 @@ function stars(heatBucket: number): string {
   return '★'.repeat(filled) + '☆'.repeat(5 - filled);
 }
 
+// section_rank uses SQL rank() (ties share a rank, next rank skips ahead), so tie
+// groups can be any size. Never split a tie group — take whole rank-groups until
+// we've shown at least minCount, with maxCount as a safety valve against runaway ties.
+function takeWithTies(data: MemberSectionHeat[], minCount: number, maxCount: number): MemberSectionHeat[] {
+  const sorted = [...data].sort((a, b) => a.section_rank - b.section_rank);
+  const result: MemberSectionHeat[] = [];
+  for (const h of sorted) {
+    if (result.length >= maxCount) break;
+    if (result.length >= minCount && h.section_rank !== result[result.length - 1].section_rank) break;
+    result.push(h);
+  }
+  return result;
+}
+
+// The single (or tied) section(s) with the highest weighted_minutes across every
+// member — "the best any-member seat this tour."
+function bestOverallSections(data: MemberSectionHeat[]): { sections: string[]; tier: string | null } {
+  if (data.length === 0) return { sections: [], tier: null };
+  const max = data.reduce((m, h) => Math.max(m, h.weighted_minutes), 0);
+  const tied = data.filter((h) => h.weighted_minutes === max);
+  const sections = [...new Set(tied.map((h) => h.section))];
+  return { sections, tier: sections.length === 1 ? tied[0].tier : null };
+}
+
 function sectionPath(polygon: [number, number][]): string {
   if (!polygon || polygon.length < 3) return '';
   return `M ${polygon[0][0]} ${polygon[0][1]} ${polygon
@@ -94,7 +118,7 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
   const sectionByCode = new Map(sections.map((s) => [s.code, s]));
   const memberData = selectedMember ? memberHeat.filter((h) => h.member === selectedMember) : [];
   const showsAnalyzed = memberData[0]?.shows_analyzed ?? 0;
-  const top3 = [...memberData].sort((a, b) => a.section_rank - b.section_rank).slice(0, 3);
+  const bestForMember = takeWithTies(memberData, 3, 8);
 
   function getMemberFill(sec: Section): string {
     const heat = memberData.find((h) => h.section === sec.code);
@@ -165,7 +189,7 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
     const parts: string[] = [];
 
     const sameSideTop = memberData
-      .filter((h) => h.heat_bucket === 1 && sectionByCode.get(h.section)?.facing_sector === selected.facing_sector)
+      .filter((h) => h.section_rank <= 3 && sectionByCode.get(h.section)?.facing_sector === selected.facing_sector)
       .sort((a, b) => a.section_rank - b.section_rank)
       .map((h) => h.section);
     if (selected.facing_sector && sameSideTop.length >= 2 && sameSideTop.includes(selected.code)) {
@@ -173,13 +197,14 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
       parts.push(`${sameSideTop.join(', ')} are ${selectedMember}'s ${side} side this tour`);
     }
 
-    const bestOverall = memberHeat.reduce<MemberSectionHeat | null>(
-      (best, h) => (!best || h.weighted_minutes > best.weighted_minutes ? h : best),
-      null
-    );
-    if (bestOverall && bestOverall.section === selected.code) {
-      const tierLabel = (TIER_LABEL[bestOverall.tier] ?? bestOverall.tier).toLowerCase();
-      parts.push(`${tierLabel} ${bestOverall.section} is the best any-member seat this tour`);
+    const { sections: bestSections, tier: bestTier } = bestOverallSections(memberHeat);
+    if (bestSections.includes(selected.code)) {
+      if (bestSections.length === 1 && bestTier) {
+        const tierLabel = (TIER_LABEL[bestTier] ?? bestTier).toLowerCase();
+        parts.push(`${tierLabel} ${bestSections[0]} is the best any-member seat this tour`);
+      } else {
+        parts.push(`${bestSections.join(', ')} are tied for the best any-member seat this tour`);
+      }
     }
 
     insightLine = parts.length > 0 ? parts.join(' — ') : null;
@@ -472,7 +497,7 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
             Historical patterns, not promises — every night is different.
           </p>
 
-          {top3.length > 0 && (
+          {bestForMember.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <div
                 style={{
@@ -484,10 +509,10 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
                   marginBottom: 8,
                 }}
               >
-                Top 3 for {selectedMember}
+                Best sections for {selectedMember}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {top3.map((h) => (
+                {bestForMember.map((h) => (
                   <div
                     key={h.section}
                     style={{
