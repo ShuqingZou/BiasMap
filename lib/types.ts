@@ -8,10 +8,11 @@ export type Database = {
       shows: { Row: Show; Insert: Omit<Show, 'id'>; Update: Partial<Show>; Relationships: [] };
       setlist_entries: { Row: SetlistEntry; Insert: Omit<SetlistEntry, 'id'>; Update: Partial<SetlistEntry>; Relationships: [] };
       facts: { Row: Fact; Insert: Omit<Fact, 'id'>; Update: Partial<Fact>; Relationships: [] };
-      member_sector_stats: { Row: MemberSectorStat; Insert: Omit<MemberSectorStat, 'id'>; Update: Partial<MemberSectorStat>; Relationships: [] };
       reports: { Row: Report; Insert: Omit<Report, 'id' | 'created_at'>; Update: Partial<Report>; Relationships: [] };
     };
-    Views: Record<string, never>;
+    Views: {
+      member_section_heat: { Row: MemberSectionHeat; Relationships: [] };
+    };
     Functions: {
       report_count: {
         Args: { show: string };
@@ -105,14 +106,16 @@ export type Fact = {
   confidence: Confidence;
 };
 
-export type MemberSectorStat = {
-  id: string;
-  tour_id: string;
+export type MemberSectionHeat = {
   member: string;
-  sector: string;
-  minutes: number;
+  venue_id: string;
+  venue_slug: string;
+  section: string;
+  tier: 'floor' | 'lower' | 'club' | 'upper';
+  weighted_minutes: number;
   shows_analyzed: number;
-  fancam_count: number;
+  section_rank: number;
+  heat_bucket: number;
 };
 
 export type Report = {

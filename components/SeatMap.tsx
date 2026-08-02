@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef } from 'react';
 import SectorCompass from './SectorCompass';
-import type { Section, Fact, MemberSectorStat, StageTemplate } from '@/lib/types';
+import type { Section, Fact, MemberSectionHeat, StageTemplate } from '@/lib/types';
 
 type Props = {
   sections: Section[];
@@ -10,9 +10,22 @@ type Props = {
   stageTemplate: StageTemplate | null;
   facts: Fact[];
   members: string[];
-  memberStats: MemberSectorStat[];
+  memberHeat: MemberSectionHeat[];
   northAngleDeg: number;
 };
+
+const SIDE_NAME: Record<string, string> = {
+  N: 'north', NE: 'northeast', E: 'east', SE: 'southeast',
+  S: 'south', SW: 'southwest', W: 'west', NW: 'northwest',
+};
+
+// heat_bucket 1 = hottest (top quintile) -> darkest; 5 = coldest -> lightest.
+const BUCKET_FILL_PCT: Record<number, number> = { 1: 90, 2: 65, 3: 42, 4: 24, 5: 10 };
+
+function stars(heatBucket: number): string {
+  const filled = Math.max(0, Math.min(5, 6 - heatBucket));
+  return '★'.repeat(filled) + '☆'.repeat(5 - filled);
+}
 
 function sectionPath(polygon: [number, number][]): string {
   if (!polygon || polygon.length < 3) return '';
@@ -54,11 +67,7 @@ const TIER_LABEL: Record<string, string> = {
   floor: 'Floor', lower: 'Lower', club: 'Club', upper: 'Upper',
 };
 
-const TIER_INTENSITY: Record<string, number> = {
-  floor: 1, lower: 0.7, club: 0.5, upper: 0.35,
-};
-
-export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate, facts, members, memberStats, northAngleDeg }: Props) {
+export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate, facts, members, memberHeat, northAngleDeg }: Props) {
   const [zoom, setZoom] = useState(1);
   const [panCenter, setPanCenter] = useState<{ x: number; y: number } | null>(null);
   const [selected, setSelected] = useState<Section | null>(null);
@@ -82,19 +91,16 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
     ? sections.find((s) => s.code.toUpperCase() === searchTrim) ?? null
     : null;
 
-  const memberData = selectedMember ? memberStats.filter((s) => s.member === selectedMember) : [];
-  const maxMinutes = memberData.reduce((max, s) => Math.max(max, s.minutes), 0);
-  const totalFancams = memberData.reduce((sum, s) => sum + s.fancam_count, 0);
+  const sectionByCode = new Map(sections.map((s) => [s.code, s]));
+  const memberData = selectedMember ? memberHeat.filter((h) => h.member === selectedMember) : [];
   const showsAnalyzed = memberData[0]?.shows_analyzed ?? 0;
+  const top3 = [...memberData].sort((a, b) => a.section_rank - b.section_rank).slice(0, 3);
 
   function getMemberFill(sec: Section): string {
-    if (!sec.facing_sector || maxMinutes === 0) return 'var(--surface)';
-    const stat = memberData.find((s) => s.sector === sec.facing_sector);
-    if (!stat) return 'var(--surface)';
-    const norm = stat.minutes / maxMinutes;
-    const tier = TIER_INTENSITY[sec.tier] ?? 0.4;
-    const pct = Math.round(norm * tier * 75 + 8);
-    return `color-mix(in srgb, var(--accent) ${pct}%, var(--surface))`;
+    const heat = memberData.find((h) => h.section === sec.code);
+    if (!heat) return 'var(--surface)';
+    const pct = BUCKET_FILL_PCT[heat.heat_bucket] ?? 14;
+    return `color-mix(in srgb, var(--warn) ${pct}%, var(--surface))`;
   }
 
   function handlePointerDown(e: React.PointerEvent<SVGSVGElement>) {
@@ -149,9 +155,35 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
       )
     : [];
 
-  const selectedMemberStat = selected?.facing_sector
-    ? memberData.find((s) => s.sector === selected.facing_sector) ?? null
+  const selectedMemberHeat = selected
+    ? memberData.find((h) => h.section === selected.code) ?? null
     : null;
+
+  // One-liner insight, shown only when a member and a section are both selected.
+  let insightLine: string | null = null;
+  if (selectedMember && selected) {
+    const parts: string[] = [];
+
+    const sameSideTop = memberData
+      .filter((h) => h.heat_bucket === 1 && sectionByCode.get(h.section)?.facing_sector === selected.facing_sector)
+      .sort((a, b) => a.section_rank - b.section_rank)
+      .map((h) => h.section);
+    if (selected.facing_sector && sameSideTop.length >= 2 && sameSideTop.includes(selected.code)) {
+      const side = SIDE_NAME[selected.facing_sector] ?? selected.facing_sector;
+      parts.push(`${sameSideTop.join(', ')} are ${selectedMember}'s ${side} side this tour`);
+    }
+
+    const bestOverall = memberHeat.reduce<MemberSectionHeat | null>(
+      (best, h) => (!best || h.weighted_minutes > best.weighted_minutes ? h : best),
+      null
+    );
+    if (bestOverall && bestOverall.section === selected.code) {
+      const tierLabel = (TIER_LABEL[bestOverall.tier] ?? bestOverall.tier).toLowerCase();
+      parts.push(`${tierLabel} ${bestOverall.section} is the best any-member seat this tour`);
+    }
+
+    insightLine = parts.length > 0 ? parts.join(' — ') : null;
+  }
 
   if (sections.length === 0) {
     return (
@@ -404,14 +436,14 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {[8, 28, 48, 63, 83].map((pct, i) => (
+              {[1, 2, 3, 4, 5].map((bucket) => (
                 <div
-                  key={i}
+                  key={bucket}
                   style={{
                     width: 14,
                     height: 14,
                     borderRadius: 3,
-                    background: `color-mix(in srgb, var(--accent) ${pct}%, var(--surface))`,
+                    background: `color-mix(in srgb, var(--warn) ${BUCKET_FILL_PCT[bucket]}%, var(--surface))`,
                   }}
                 />
               ))}
@@ -419,7 +451,7 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
                 Darker = more time near these seats
               </span>
             </div>
-            {totalFancams > 0 && (
+            {showsAnalyzed > 0 && (
               <span
                 style={{
                   display: 'inline-flex',
@@ -432,13 +464,56 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
                   color: 'var(--text-dim)',
                 }}
               >
-                Based on {totalFancams} fancams · {showsAnalyzed} shows
+                Based on {showsAnalyzed} show{showsAnalyzed !== 1 ? 's' : ''} logged
               </span>
             )}
           </div>
           <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6, fontStyle: 'italic' }}>
             Historical patterns, not promises — every night is different.
           </p>
+
+          {top3.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--text-dim)',
+                  marginBottom: 8,
+                }}
+              >
+                Top 3 for {selectedMember}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {top3.map((h) => (
+                  <div
+                    key={h.section}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      background: 'var(--surface)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <span style={{ fontSize: 13, color: 'var(--text)' }}>
+                      <strong>{h.section}</strong>{' '}
+                      <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                        {TIER_LABEL[h.tier] ?? h.tier}
+                      </span>
+                    </span>
+                    <span style={{ color: 'var(--warn)', fontSize: 13, letterSpacing: 1 }}>
+                      {stars(h.heat_bucket)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -503,6 +578,23 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
             </button>
           </div>
 
+          {insightLine && (
+            <p
+              style={{
+                margin: '0 0 14px',
+                fontSize: 13,
+                lineHeight: 1.5,
+                color: 'var(--text)',
+                background: 'var(--bg)',
+                border: '1px solid var(--line)',
+                borderRadius: 8,
+                padding: '10px 12px',
+              }}
+            >
+              {insightLine}
+            </p>
+          )}
+
           <div style={{ display: 'flex', gap: 20, marginBottom: 14, flexWrap: 'wrap' }}>
             {selected.facing_sector && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -530,7 +622,7 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
                 </div>
               </div>
             )}
-            {selectedMember && selectedMemberStat && (
+            {selectedMember && selectedMemberHeat && (
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{selectedMember}&apos;s time here</div>
                 <div
@@ -541,7 +633,7 @@ export default function SeatMap({ sections, viewBox, stageCenter, stageTemplate,
                     color: 'var(--text)',
                   }}
                 >
-                  {Math.round(selectedMemberStat.minutes)}m
+                  {Math.round(selectedMemberHeat.weighted_minutes)}m · {stars(selectedMemberHeat.heat_bucket)}
                 </div>
               </div>
             )}

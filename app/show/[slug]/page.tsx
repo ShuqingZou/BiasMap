@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { getSupabaseClient } from '@/lib/supabase';
-import type { Show, Venue, Tour, SetlistEntry, Fact, MemberSectorStat, Section } from '@/lib/types';
+import type { Show, Venue, Tour, SetlistEntry, Fact, MemberSectionHeat, Section } from '@/lib/types';
 import Countdown from '@/components/Countdown';
 import StatusChip from '@/components/StatusChip';
 import SeatMap from '@/components/SeatMap';
@@ -38,11 +38,35 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   };
 }
 
+// Supabase/PostgREST caps a single response at 1000 rows regardless of the
+// requested range — member_section_heat can exceed that per venue, so page through it.
+async function fetchAllMemberHeat(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  venueId: string
+): Promise<MemberSectionHeat[]> {
+  const pageSize = 1000;
+  const all: MemberSectionHeat[] = [];
+  let offset = 0;
+  for (;;) {
+    const { data } = await supabase
+      .from('member_section_heat')
+      .select('*')
+      .eq('venue_id', venueId)
+      .range(offset, offset + pageSize - 1)
+      .returns<MemberSectionHeat[]>();
+    const page = data ?? [];
+    all.push(...page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 export default async function ShowPage({ params }: { params: Params }) {
   const { slug } = await params;
   const supabase = getSupabaseClient();
 
-  const [showRes, setlistRes, factsRes, memberStatsRes] = await Promise.all([
+  const [showRes, setlistRes, factsRes] = await Promise.all([
     supabase
       .from('shows')
       .select('*, venues(*, sections(*)), tours(*, artists(*))')
@@ -57,10 +81,6 @@ export default async function ShowPage({ params }: { params: Params }) {
       .from('facts')
       .select('*')
       .returns<Fact[]>(),
-    supabase
-      .from('member_sector_stats')
-      .select('*')
-      .returns<MemberSectorStat[]>(),
   ]);
 
   const show = showRes.data;
@@ -77,9 +97,13 @@ export default async function ShowPage({ params }: { params: Params }) {
       (f.venue_id === venueId && !f.show_id) ||
       (!f.venue_id && !f.show_id && f.tour_id === tourId)
   );
-  const memberStats = (memberStatsRes.data ?? []).filter((s) => s.tour_id === tourId);
   const sections = show.venues.sections ?? [];
   const members = show.tours.members ?? [];
+
+  // member_section_heat is hand-logged from VOD (see position_log). The view is
+  // venue-aware (venue_id/section_rank/heat_bucket are all scoped per venue), so
+  // filtering by this show's venue is enough — no per-venue hardcoding needed.
+  const memberHeat = await fetchAllMemberHeat(supabase, venueId);
 
   // Sibling shows (same venue + tour) for the day switcher
   const { data: siblings } = await supabase
@@ -232,7 +256,7 @@ export default async function ShowPage({ params }: { params: Params }) {
           stageTemplate={show.tours.stage_template}
           facts={facts}
           members={members}
-          memberStats={memberStats}
+          memberHeat={memberHeat}
           northAngleDeg={show.venues.north_angle_deg}
         />
       </section>
