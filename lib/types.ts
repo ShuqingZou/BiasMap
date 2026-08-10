@@ -12,6 +12,7 @@ export type Database = {
     };
     Views: {
       member_section_heat: { Row: MemberSectionHeat; Relationships: [] };
+      member_tour_profile: { Row: MemberTourProfile; Relationships: [] };
     };
     Functions: {
       report_count: {
@@ -116,6 +117,17 @@ export type MemberSectionHeat = {
   shows_analyzed: number;
   section_rank: number;
   heat_bucket: number;
+};
+
+export type TourProfileCategory = 'half' | 'arm' | 'edge';
+
+export type MemberTourProfile = {
+  member: string;
+  shows_analyzed: number;
+  category: TourProfileCategory;
+  item: string;
+  pct: number;
+  item_rank: number;
 };
 
 export type Report = {

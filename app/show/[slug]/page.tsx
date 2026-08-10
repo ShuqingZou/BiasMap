@@ -2,10 +2,11 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { getSupabaseClient } from '@/lib/supabase';
-import type { Show, Venue, Tour, SetlistEntry, Fact, MemberSectionHeat, Section } from '@/lib/types';
+import type { Show, Venue, Tour, SetlistEntry, Fact, MemberSectionHeat, MemberTourProfile, Section } from '@/lib/types';
 import Countdown from '@/components/Countdown';
 import StatusChip from '@/components/StatusChip';
 import SeatMap from '@/components/SeatMap';
+import TourProfileCard from '@/components/TourProfileCard';
 import DaySwitcher from '@/components/DaySwitcher';
 import SetlistSection, { type HistoryRow, type ExpectedSetlist } from '@/components/SetlistSection';
 
@@ -100,10 +101,23 @@ export default async function ShowPage({ params }: { params: Params }) {
   const sections = show.venues.sections ?? [];
   const members = show.tours.members ?? [];
 
+  // Gates seat map (logged past shows) vs tour profile card (future shows — no
+  // video exists yet, so no position log is possible). Status-based, not date-based:
+  // a show's date can slip into the past before its status/log catch up.
+  const isUpcoming = show.status === 'upcoming' || show.status === 'guide_ready';
+  const isCompleted = show.status === 'completed' || show.status === 'report_in';
+
   // member_section_heat is hand-logged from VOD (see position_log). The view is
   // venue-aware (venue_id/section_rank/heat_bucket are all scoped per venue), so
   // filtering by this show's venue is enough — no per-venue hardcoding needed.
-  const memberHeat = await fetchAllMemberHeat(supabase, venueId);
+  // Only past shows can have a log, so skip the fetch entirely for upcoming ones.
+  const memberHeat = isUpcoming ? [] : await fetchAllMemberHeat(supabase, venueId);
+
+  // member_tour_profile is tour-wide (no venue/show dimension), so every future
+  // show — regardless of venue — shows the same profile data.
+  const memberProfiles = isUpcoming
+    ? (await supabase.from('member_tour_profile').select('*').returns<MemberTourProfile[]>()).data ?? []
+    : [];
 
   // Sibling shows (same venue + tour) for the day switcher
   const { data: siblings } = await supabase
@@ -172,8 +186,6 @@ export default async function ShowPage({ params }: { params: Params }) {
     month: 'short', day: 'numeric',
   });
 
-  const isUpcoming = show.status === 'upcoming' || show.status === 'guide_ready';
-  const isCompleted = show.status === 'completed' || show.status === 'report_in';
   const hasSiblings = (siblings ?? []).length > 1;
 
   // Explicit date check (independent of status) for whether to mask surprise-song
@@ -246,19 +258,23 @@ export default async function ShowPage({ params }: { params: Params }) {
         />
       </section>
 
-      {/* Seat Map */}
+      {/* Seat Map — logged past shows — or Member Profiles for future shows with no log yet */}
       <section id="seat-map" style={{ marginBottom: 48 }}>
-        <SectionHeader>Seat Map</SectionHeader>
-        <SeatMap
-          sections={sections}
-          viewBox={show.venues.chart_svg_viewbox ?? '0 0 1000 1000'}
-          stageCenter={show.venues.stage_center}
-          stageTemplate={show.tours.stage_template}
-          facts={facts}
-          members={members}
-          memberHeat={memberHeat}
-          northAngleDeg={show.venues.north_angle_deg}
-        />
+        <SectionHeader>{isUpcoming ? 'Member Profiles' : 'Seat Map'}</SectionHeader>
+        {isUpcoming ? (
+          <TourProfileCard profiles={memberProfiles} members={members} />
+        ) : (
+          <SeatMap
+            sections={sections}
+            viewBox={show.venues.chart_svg_viewbox ?? '0 0 1000 1000'}
+            stageCenter={show.venues.stage_center}
+            stageTemplate={show.tours.stage_template}
+            facts={facts}
+            members={members}
+            memberHeat={memberHeat}
+            northAngleDeg={show.venues.north_angle_deg}
+          />
+        )}
       </section>
 
       {/* Know before you go */}
