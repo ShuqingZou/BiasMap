@@ -6,7 +6,7 @@ BiasMap is a fan tool for concert-goers that turns scattered tour intel — setl
 movement, and seat reports — into a per-venue guide you can check before buying a ticket or walking
 into the arena. Live build for the BTS ARIRANG World Tour (North American leg).
 
-🔗 Live app · Built with Next.js 16 (App Router), TypeScript, Supabase (Postgres), and Tailwind CSS.
+🔗 [Live app](https://biasmap.app/)· Built with Next.js 16 (App Router), TypeScript, Supabase (Postgres), and Tailwind CSS.
 
 ## Highlights
 
