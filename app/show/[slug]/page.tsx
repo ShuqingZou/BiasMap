@@ -101,9 +101,9 @@ export default async function ShowPage({ params }: { params: Params }) {
   const sections = show.venues.sections ?? [];
   const members = show.tours.members ?? [];
 
-  // Gates seat map (logged past shows) vs tour profile card (future shows — no
-  // video exists yet, so no position log is possible). Status-based, not date-based:
-  // a show's date can slip into the past before its status/log catch up.
+  // Status-based, not date-based: a show's date can slip into the past before its
+  // status/log catch up. Drives setlist masking (upcoming = masked, past = full)
+  // independently of whether we have heatmap data for this venue yet.
   const isUpcoming = show.status === 'upcoming' || show.status === 'guide_ready';
   const isCompleted = show.status === 'completed' || show.status === 'report_in';
 
@@ -113,11 +113,18 @@ export default async function ShowPage({ params }: { params: Params }) {
   // Only past shows can have a log, so skip the fetch entirely for upcoming ones.
   const memberHeat = isUpcoming ? [] : await fetchAllMemberHeat(supabase, venueId);
 
-  // member_tour_profile is tour-wide (no venue/show dimension), so every future
-  // show — regardless of venue — shows the same profile data.
-  const memberProfiles = isUpcoming
-    ? (await supabase.from('member_tour_profile').select('*').returns<MemberTourProfile[]>()).data ?? []
-    : [];
+  // Three states: (1) past show with a logged heatmap for this venue -> Seat Map,
+  // (2) past show whose venue hasn't been logged yet -> Profile Card (same as
+  // upcoming), (3) upcoming show -> always Profile Card, even if this venue
+  // happens to have heatmap data from other nights — we never predict a night
+  // that hasn't happened.
+  const showHeatmap = !isUpcoming && memberHeat.length > 0;
+
+  // member_tour_profile is tour-wide (no venue/show dimension), so it's the same
+  // data whenever it's needed, regardless of which show triggered the fetch.
+  const memberProfiles = showHeatmap
+    ? []
+    : (await supabase.from('member_tour_profile').select('*').returns<MemberTourProfile[]>()).data ?? [];
 
   // Sibling shows (same venue + tour) for the day switcher
   const { data: siblings } = await supabase
@@ -258,12 +265,11 @@ export default async function ShowPage({ params }: { params: Params }) {
         />
       </section>
 
-      {/* Seat Map — logged past shows — or Member Profiles for future shows with no log yet */}
+      {/* Seat Map — only once this venue has logged heatmap data — or Member
+          Profiles otherwise (upcoming shows, or past shows not logged yet) */}
       <section id="seat-map" style={{ marginBottom: 48 }}>
-        <SectionHeader>{isUpcoming ? 'Member Profiles' : 'Seat Map'}</SectionHeader>
-        {isUpcoming ? (
-          <TourProfileCard profiles={memberProfiles} members={members} />
-        ) : (
+        <SectionHeader>{showHeatmap ? 'Seat Map' : 'Member Profiles'}</SectionHeader>
+        {showHeatmap ? (
           <SeatMap
             sections={sections}
             viewBox={show.venues.chart_svg_viewbox ?? '0 0 1000 1000'}
@@ -274,6 +280,8 @@ export default async function ShowPage({ params }: { params: Params }) {
             memberHeat={memberHeat}
             northAngleDeg={show.venues.north_angle_deg}
           />
+        ) : (
+          <TourProfileCard profiles={memberProfiles} members={members} />
         )}
       </section>
 
